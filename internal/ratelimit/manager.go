@@ -557,7 +557,7 @@ func (m *Manager) BindCaller(callerID string, policyName string, quotaLimit int)
 	b := &model.CallerBinding{
 		CallerID:   callerID,
 		PolicyName: policyName,
-		QuotaLimit: quotaLimit,
+		QuotaLimit: effectiveQuota,
 		UsedTokens: 0,
 		CreatedAt:  now,
 		UpdatedAt:  now,
@@ -582,6 +582,10 @@ func (m *Manager) BindCaller(callerID string, policyName string, quotaLimit int)
 }
 
 func (m *Manager) RequestTokens(callerID string, tokens int, waitable bool, waitSec int) (*model.TokenResult, error) {
+	if tokens <= 0 {
+		return nil, fmt.Errorf("tokens must be positive")
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

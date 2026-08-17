@@ -1093,7 +1093,7 @@ func (s *Storage) ListLocks() ([]model.Lock, error) {
 	}
 	defer rows.Close()
 
-	var locks []model.Lock
+	locks := make([]model.Lock, 0)
 	for rows.Next() {
 		var l model.Lock
 		var reentrantInt int
@@ -5975,4 +5975,3 @@ func (s *Storage) RemoveFromQueueByLock(lockName string) error {
 	_, err := s.db.Exec(`DELETE FROM wait_queue WHERE lock_name = ?`, lockName)
 	return err
 }
-

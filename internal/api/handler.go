@@ -362,7 +362,11 @@ func (h *Handler) GetLock(c *gin.Context) {
 
 	detail, err := h.manager.GetLockDetail(name, withHistory)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		if strings.HasPrefix(err.Error(), "lock not found:") {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"lock": detail})

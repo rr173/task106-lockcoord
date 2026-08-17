@@ -20,6 +20,7 @@ type Manager struct {
 	mu                sync.Mutex
 	timers            map[string]*time.Timer
 	stopCh            chan struct{}
+	stopOnce          sync.Once
 	heatmap           HeatmapRecorder
 	acceleratedGrants map[string]int
 	heatmapMgr        HeatmapCooldownManager
@@ -99,7 +100,7 @@ func (m *Manager) Start() error {
 }
 
 func (m *Manager) Stop() {
-	close(m.stopCh)
+	m.stopOnce.Do(func() { close(m.stopCh) })
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, t := range m.timers {
@@ -695,7 +696,7 @@ func (m *Manager) ListAllLocks() ([]model.LockStatusInfo, error) {
 		return nil, err
 	}
 
-	var result []model.LockStatusInfo
+	result := make([]model.LockStatusInfo, 0, len(locks))
 	for _, lock := range locks {
 		info := model.LockStatusInfo{
 			Name:      lock.Name,
