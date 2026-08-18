@@ -487,6 +487,14 @@ func (m *Manager) tryGrantNextLocked(lockName string) (*model.Lock, error) {
 		return m.tryGrantNextLocked(lockName)
 	}
 
+	if m.admissionGuard != nil {
+		if err := m.admissionGuard.BeforeAcquire(lockName, item.Holder, item.LeaseSec); err != nil {
+			if requeueErr := m.storage.RequeueWaitQueueItem(item); requeueErr != nil { return nil, requeueErr }
+			m.addHistoryLocked(lockName, item.Holder, model.OpAcquire, "queued grant blocked: "+err.Error())
+			return nil, nil
+		}
+	}
+
 	if m.budgetMgr != nil {
 		checkResult, err := m.budgetMgr.CheckAcquire(item.Holder, lockName, item.LeaseSec)
 		if err != nil {

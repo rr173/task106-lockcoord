@@ -5978,3 +5978,9 @@ func (s *Storage) RemoveFromQueueByLock(lockName string) error {
 	_, err := s.db.Exec(`DELETE FROM wait_queue WHERE lock_name = ?`, lockName)
 	return err
 }
+
+func (s *Storage) RequeueWaitQueueItem(item *model.WaitQueueItem) error {
+	if item == nil { return fmt.Errorf("cannot requeue nil wait item") }
+	if item.TimeoutAt.Before(time.Now()) { item.TimeoutAt = time.Now().Add(30 * time.Second) }
+	return s.Enqueue(item)
+}
