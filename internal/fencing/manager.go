@@ -20,6 +20,7 @@ func (m *Manager) Issue(resourcePath, holder string, leaseSec int, now time.Time
 		return "", err
 	}
 	if err := m.store.RecordCoordinationEvent("fencing_issued", resourcePath, holder, token.Token); err != nil {
+		_ = m.store.DeleteFencingToken(token.Token)
 		return "", err
 	}
 	return token.Token, nil

@@ -95,3 +95,8 @@ func (s *Storage) ListFencingTokens(resourcePath string, limit int) ([]model.Fen
 	}
 	return result, rows.Err()
 }
+
+func (s *Storage) DeleteFencingToken(token string) error {
+	_, err := s.db.Exec(`DELETE FROM coord_fencing_tokens WHERE token = ?`, token)
+	return err
+}
