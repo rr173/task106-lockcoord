@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"task106/internal/audit"
+	"task106/internal/controlplane"
 	"task106/internal/debt"
 	"task106/internal/handover"
 	"task106/internal/heartbeat"
@@ -19,8 +22,6 @@ import (
 	"task106/internal/reputation"
 	"task106/internal/shadow"
 	"task106/internal/topology"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -40,6 +41,11 @@ type Handler struct {
 	budgetMgr     *lockbudget.Manager
 	rateAlertMgr  *ratealert.Manager
 	reputationMgr *reputation.Manager
+	coordMgr      *controlplane.Manager
+}
+
+func (h *Handler) SetControlPlane(manager *controlplane.Manager) {
+	h.coordMgr = manager
 }
 
 func NewHandler(m *lock.Manager, rl *ratelimit.Manager, om *orchestration.Manager, am *audit.Manager, tm *topology.Manager, sm *shadow.Manager, dm *debt.Manager, hm *handover.Manager, hbm *heartbeat.Manager, hmm *heatmap.Manager, bm *lockbudget.Manager, ram *ratealert.Manager, repMgr *reputation.Manager) *Handler {
@@ -69,6 +75,36 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		}
 		api.GET("/leases", h.ListLeases)
 		api.GET("/wait-graph", h.GetWaitGraph)
+
+		coordination := api.Group("/coordination")
+		{
+			resources := coordination.Group("/resources")
+			{
+				resources.GET("", h.ListCoordinationResources)
+				resources.POST("", h.CreateCoordinationResource)
+				resources.POST("/state", h.SetCoordinationResourceState)
+				resources.POST("/policy", h.SetCoordinationResourcePolicy)
+				resources.GET("/policies", h.ListCoordinationPolicies)
+			}
+			maintenance := coordination.Group("/maintenance")
+			{
+				maintenance.POST("/windows", h.CreateMaintenanceWindow)
+				maintenance.GET("/windows", h.ListMaintenanceWindows)
+				maintenance.POST("/windows/:id/cancel", h.CancelMaintenanceWindow)
+			}
+			fencing := coordination.Group("/fencing")
+			{
+				fencing.POST("/issue", h.IssueFencingToken)
+				fencing.POST("/validate", h.ValidateFencingToken)
+				fencing.GET("/tokens", h.ListFencingTokens)
+			}
+			recovery := coordination.Group("/recovery")
+			{
+				recovery.POST("/run", h.RunRecovery)
+				recovery.GET("/checkpoints", h.ListRecoveryCheckpoints)
+			}
+			coordination.GET("/events", h.ListCoordinationEvents)
+		}
 
 		rateLimit := api.Group("/ratelimit")
 		{
@@ -387,10 +423,10 @@ func (h *Handler) AcquireLock(c *gin.Context) {
 			log.Printf("[handler] check group degraded error: %v", err)
 		} else if degraded {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"error":               model.ErrGroupDegraded.Error(),
-				"group_degraded":      true,
-				"degraded_reason":     reason,
-				"can_renew":           true,
+				"error":           model.ErrGroupDegraded.Error(),
+				"group_degraded":  true,
+				"degraded_reason": reason,
+				"can_renew":       true,
 			})
 			return
 		}
@@ -400,7 +436,7 @@ func (h *Handler) AcquireLock(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, audit.ErrCircuitBreakerOpen) {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"error":              err.Error(),
+				"error":                err.Error(),
 				"circuit_breaker_open": true,
 			})
 			return
@@ -485,9 +521,9 @@ func (h *Handler) RenewLock(c *gin.Context) {
 		reg, _ := h.heartbeatMgr.GetStatus(req.Holder)
 		if reg != nil && reg.Status == model.HeartbeatStatusFrozen {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error":          "caller resources are frozen, cannot renew lock",
-				"frozen":         true,
-				"caller_status":  model.HeartbeatStatusFrozen,
+				"error":         "caller resources are frozen, cannot renew lock",
+				"frozen":        true,
+				"caller_status": model.HeartbeatStatusFrozen,
 			})
 			return
 		}
@@ -551,10 +587,10 @@ func (h *Handler) AcquireLocksBatch(c *gin.Context) {
 			log.Printf("[handler] check group degraded error: %v", err)
 		} else if degraded {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"error":               model.ErrGroupDegraded.Error(),
-				"group_degraded":      true,
-				"degraded_reason":     reason,
-				"can_renew":           true,
+				"error":           model.ErrGroupDegraded.Error(),
+				"group_degraded":  true,
+				"degraded_reason": reason,
+				"can_renew":       true,
 			})
 			return
 		}
@@ -1552,12 +1588,12 @@ func (h *Handler) GetShadowDiffStats(c *gin.Context) {
 }
 
 type DebtBorrowRequest struct {
-	Debtor          string `json:"debtor" binding:"required"`
-	Creditor        string `json:"creditor" binding:"required"`
-	Amount          int    `json:"amount" binding:"required,min=1"`
-	ResourceType    string `json:"resource_type" binding:"required"`
-	ResourceKey     string `json:"resource_key"`
-	GracePeriodSec  int    `json:"grace_period_sec"`
+	Debtor         string `json:"debtor" binding:"required"`
+	Creditor       string `json:"creditor" binding:"required"`
+	Amount         int    `json:"amount" binding:"required,min=1"`
+	ResourceType   string `json:"resource_type" binding:"required"`
+	ResourceKey    string `json:"resource_key"`
+	GracePeriodSec int    `json:"grace_period_sec"`
 }
 
 type DebtReturnRequest struct {
@@ -1577,9 +1613,9 @@ type DebtRollbackFailRequest struct {
 }
 
 type DebtReservationExpireRequest struct {
-	CallerID    string `json:"caller_id" binding:"required"`
-	Tokens      int    `json:"tokens" binding:"required,min=1"`
-	PolicyName  string `json:"policy_name" binding:"required"`
+	CallerID   string `json:"caller_id" binding:"required"`
+	Tokens     int    `json:"tokens" binding:"required,min=1"`
+	PolicyName string `json:"policy_name" binding:"required"`
 }
 
 type DebtForceReclaimRequest struct {
@@ -2107,8 +2143,8 @@ func (h *Handler) AddGroupDependency(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"success":   true,
-		"message":   fmt.Sprintf("dependency added: %s -> %s", req.GroupName, req.DependsOn),
+		"success": true,
+		"message": fmt.Sprintf("dependency added: %s -> %s", req.GroupName, req.DependsOn),
 	})
 }
 

@@ -1,6 +1,6 @@
 # task106 lock coordination service
 
-这是一个基于 Go 的锁、配额和调用方协调服务。它把锁租约、等待队列、限流、拓扑关系、交接、审计和告警等状态保存到 SQLite，并通过 HTTP API 提供查询和操作能力。
+这是一个基于 Go 的锁、配额和调用方协调服务。它把锁租约、等待队列、限流、拓扑关系、交接、审计和告警等状态保存到 SQLite，并通过资源控制面提供资源层级、维护隔离、fencing token 和重启恢复检查。
 
 ## 标准命令
 
@@ -13,6 +13,8 @@ go run ./cmd/lock-server
 ```
 
 服务默认监听 `:8080`，数据库默认写入 `./data/locks.db`；可以通过 `ADDR` 和 `DB_PATH` 覆盖。
+
+锁申请会经过 `/api/v1/coordination/resources` 的资源状态和策略检查；`/api/v1/coordination/fencing` 提供 token 签发/校验；`/api/v1/coordination/recovery` 提供启动和人工恢复 checkpoint。
 
 ## 自检
 

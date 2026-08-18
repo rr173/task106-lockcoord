@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"task106/internal/model"
 	"strings"
+	"task106/internal/model"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -885,6 +885,9 @@ func (s *Storage) initSchema() error {
 	if err := s.migrateSchema(); err != nil {
 		return err
 	}
+	if err := s.initCoordinationSchema(); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -948,12 +951,12 @@ func (s *Storage) migrateSchema() error {
 	}
 
 	cooldownIntColumns := map[string]int{
-		"cooldown_enabled":                 1,
-		"cooldown_consecutive_hot_cycles":  3,
-		"cooldown_lease_sec":               30,
-		"cooldown_resolve_cycles":          2,
-		"cooldown_max_sec":                 3600,
-		"cooldown_accelerated_grant":       1,
+		"cooldown_enabled":                1,
+		"cooldown_consecutive_hot_cycles": 3,
+		"cooldown_lease_sec":              30,
+		"cooldown_resolve_cycles":         2,
+		"cooldown_max_sec":                3600,
+		"cooldown_accelerated_grant":      1,
 	}
 	for col, defaultValue := range cooldownIntColumns {
 		row := s.db.QueryRow(`
@@ -974,7 +977,7 @@ func (s *Storage) migrateSchema() error {
 	}
 
 	cooldownRealColumns := map[string]float64{
-		"cooldown_lease_min_pct":         10.0,
+		"cooldown_lease_min_pct":        10.0,
 		"cooldown_resolve_threshold_ms": 1000.0,
 	}
 	for col, defaultValue := range cooldownRealColumns {
@@ -1018,11 +1021,11 @@ func (s *Storage) migrateSchema() error {
 	}
 
 	lbSummaryIntColumns := map[string]int{
-		"overdraft_limit":     0,
-		"overdraft_used":      0,
-		"overdraft_penalty":   0,
-		"transferred_in":      0,
-		"transferred_out":     0,
+		"overdraft_limit":      0,
+		"overdraft_used":       0,
+		"overdraft_penalty":    0,
+		"transferred_in":       0,
+		"transferred_out":      0,
 		"carry_over_deduction": 0,
 	}
 	for col, defaultValue := range lbSummaryIntColumns {
@@ -1108,13 +1111,13 @@ func (s *Storage) ListLocks() ([]model.Lock, error) {
 
 func (s *Storage) GetActiveLease(lockName string) (*model.Lease, error) {
 	row := s.db.QueryRow(`
-		SELECT id, lock_name, holder, lease_sec, acquired_at, expires_at, active
+		SELECT id, lock_name, holder, lease_sec, acquired_at, expires_at, active, fencing_token
 		FROM leases WHERE lock_name = ? AND active = 1 ORDER BY id DESC LIMIT 1
 	`, lockName)
 
 	var l model.Lease
 	var activeInt int
-	err := row.Scan(&l.ID, &l.LockName, &l.Holder, &l.LeaseSec, &l.AcquiredAt, &l.ExpiresAt, &activeInt)
+	err := row.Scan(&l.ID, &l.LockName, &l.Holder, &l.LeaseSec, &l.AcquiredAt, &l.ExpiresAt, &activeInt, &l.FencingToken)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1131,9 +1134,9 @@ func (s *Storage) CreateLease(l *model.Lease) error {
 		activeInt = 1
 	}
 	result, err := s.db.Exec(`
-		INSERT INTO leases (lock_name, holder, lease_sec, acquired_at, expires_at, active)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, l.LockName, l.Holder, l.LeaseSec, l.AcquiredAt, l.ExpiresAt, activeInt)
+		INSERT INTO leases (lock_name, holder, lease_sec, acquired_at, expires_at, active, fencing_token)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, l.LockName, l.Holder, l.LeaseSec, l.AcquiredAt, l.ExpiresAt, activeInt, l.FencingToken)
 	if err != nil {
 		return err
 	}
@@ -1155,7 +1158,7 @@ func (s *Storage) UpdateLeaseExpiry(lockName string, newExpiresAt time.Time) err
 
 func (s *Storage) ListActiveLeases() ([]model.Lease, error) {
 	rows, err := s.db.Query(`
-		SELECT id, lock_name, holder, lease_sec, acquired_at, expires_at, active
+		SELECT id, lock_name, holder, lease_sec, acquired_at, expires_at, active, fencing_token
 		FROM leases WHERE active = 1 ORDER BY id
 	`)
 	if err != nil {
@@ -1167,7 +1170,7 @@ func (s *Storage) ListActiveLeases() ([]model.Lease, error) {
 	for rows.Next() {
 		var l model.Lease
 		var activeInt int
-		if err := rows.Scan(&l.ID, &l.LockName, &l.Holder, &l.LeaseSec, &l.AcquiredAt, &l.ExpiresAt, &activeInt); err != nil {
+		if err := rows.Scan(&l.ID, &l.LockName, &l.Holder, &l.LeaseSec, &l.AcquiredAt, &l.ExpiresAt, &activeInt, &l.FencingToken); err != nil {
 			return nil, err
 		}
 		l.Active = activeInt != 0
@@ -3730,9 +3733,9 @@ func (s *Storage) UpsertLeaseForTransfer(l *model.Lease) error {
 		activeInt = 1
 	}
 	result, err := s.db.Exec(`
-		INSERT INTO leases (lock_name, holder, lease_sec, acquired_at, expires_at, active)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, l.LockName, l.Holder, l.LeaseSec, l.AcquiredAt, l.ExpiresAt, activeInt)
+		INSERT INTO leases (lock_name, holder, lease_sec, acquired_at, expires_at, active, fencing_token)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, l.LockName, l.Holder, l.LeaseSec, l.AcquiredAt, l.ExpiresAt, activeInt, l.FencingToken)
 	if err != nil {
 		return err
 	}
@@ -4644,14 +4647,14 @@ func (s *Storage) GetHeatmapConfig() (*model.HeatmapConfig, error) {
 			TopN:                10,
 			HistoryRetentionMin: 1440,
 			Cooldown: model.CooldownConfig{
-				Enabled:                true,
-				ConsecutiveHotCycles:   3,
-				CooldownLeaseSec:       30,
-				CooldownLeaseMinPct:    10,
-				ResolveThresholdMs:     1000,
+				Enabled:                  true,
+				ConsecutiveHotCycles:     3,
+				CooldownLeaseSec:         30,
+				CooldownLeaseMinPct:      10,
+				ResolveThresholdMs:       1000,
 				ResolveConsecutiveCycles: 2,
-				MaxCooldownSec:         3600,
-				AcceleratedGrant:       true,
+				MaxCooldownSec:           3600,
+				AcceleratedGrant:         true,
 			},
 		}
 		_, err := s.db.Exec(`
@@ -5069,7 +5072,7 @@ func (s *Storage) ListBudgetTransfers(query *model.BudgetTransferListQuery) ([]m
 		whereSQL = " WHERE " + strings.Join(whereClauses, " AND ")
 	}
 
-	countRow := s.db.QueryRow("SELECT COUNT(*) FROM lock_budget_transfers" + whereSQL, args...)
+	countRow := s.db.QueryRow("SELECT COUNT(*) FROM lock_budget_transfers"+whereSQL, args...)
 	var total int64
 	if err := countRow.Scan(&total); err != nil {
 		return nil, 0, err

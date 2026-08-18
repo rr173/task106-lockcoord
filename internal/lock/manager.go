@@ -3,11 +3,11 @@ package lock
 import (
 	"fmt"
 	"log"
+	"sort"
+	"sync"
 	"task106/internal/lockbudget"
 	"task106/internal/model"
 	"task106/internal/storage"
-	"sort"
-	"sync"
 	"time"
 )
 
@@ -26,6 +26,8 @@ type Manager struct {
 	heatmapMgr        HeatmapCooldownManager
 	budgetMgr         *lockbudget.Manager
 	reputationChecker ReputationChecker
+	admissionGuard    AdmissionGuard
+	fencingIssuer     FencingIssuer
 }
 
 type HeatmapCooldownManager interface {
@@ -46,6 +48,14 @@ type ReputationChecker interface {
 	ShouldPrioritizeInQueue(callerID string) bool
 	CheckBronzeLockLimit(callerID string, currentHeldLocks int, configuredMax int) (bool, string)
 	IsBronze(callerID string) bool
+}
+
+type AdmissionGuard interface {
+	BeforeAcquire(lockName, holder string, leaseSec int) error
+}
+
+type FencingIssuer interface {
+	Issue(resourcePath, holder string, leaseSec int, now time.Time) (string, error)
 }
 
 func NewManager(s *storage.Storage) *Manager {
@@ -79,6 +89,18 @@ func (m *Manager) SetReputationChecker(rc ReputationChecker) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.reputationChecker = rc
+}
+
+func (m *Manager) SetAdmissionGuard(guard AdmissionGuard) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.admissionGuard = guard
+}
+
+func (m *Manager) SetFencingIssuer(issuer FencingIssuer) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.fencingIssuer = issuer
 }
 
 func (m *Manager) BudgetManager() *lockbudget.Manager {
@@ -149,15 +171,15 @@ func (m *Manager) stopLeaseTimerLocked(lockName string) {
 }
 
 type AcquireResult struct {
-	Acquired           bool
-	Queued             bool
-	Lock               *model.Lock
-	Lease              *model.Lease
-	Position           int
-	Deadlock           bool
-	DeadlockCycle      *model.DeadlockCycle
-	BudgetRejected     bool
-	BudgetCheckResult  *model.BudgetAcquireCheckResult
+	Acquired          bool
+	Queued            bool
+	Lock              *model.Lock
+	Lease             *model.Lease
+	Position          int
+	Deadlock          bool
+	DeadlockCycle     *model.DeadlockCycle
+	BudgetRejected    bool
+	BudgetCheckResult *model.BudgetAcquireCheckResult
 }
 
 func (m *Manager) AcquireLock(lockName, holder string, leaseSec int, reentrant bool) (*AcquireResult, error) {
@@ -172,6 +194,11 @@ func (m *Manager) AcquireLock(lockName, holder string, leaseSec int, reentrant b
 }
 
 func (m *Manager) acquireLockLocked(lockName, holder string, leaseSec int, reentrant bool) (*AcquireResult, error) {
+	if m.admissionGuard != nil {
+		if err := m.admissionGuard.BeforeAcquire(lockName, holder, leaseSec); err != nil {
+			return nil, err
+		}
+	}
 	if m.heatmap != nil {
 		m.heatmap.RecordLockRequest(lockName)
 	}
@@ -331,6 +358,13 @@ func (m *Manager) acquireLockLocked(lockName, holder string, leaseSec int, reent
 		AcquiredAt: now,
 		ExpiresAt:  now.Add(time.Duration(effectiveLeaseSec) * time.Second),
 		Active:     true,
+	}
+	if m.fencingIssuer != nil {
+		token, err := m.fencingIssuer.Issue(lockName, holder, effectiveLeaseSec, now)
+		if err != nil {
+			return nil, fmt.Errorf("issue fencing token: %w", err)
+		}
+		lease.FencingToken = token
 	}
 	if err := m.storage.CreateLease(lease); err != nil {
 		return nil, err
@@ -496,6 +530,13 @@ func (m *Manager) tryGrantNextLocked(lockName string) (*model.Lock, error) {
 		AcquiredAt: now,
 		ExpiresAt:  now.Add(time.Duration(leaseSec) * time.Second),
 		Active:     true,
+	}
+	if m.fencingIssuer != nil {
+		token, err := m.fencingIssuer.Issue(lockName, item.Holder, leaseSec, now)
+		if err != nil {
+			return nil, fmt.Errorf("issue fencing token: %w", err)
+		}
+		lease.FencingToken = token
 	}
 	if err := m.storage.CreateLease(lease); err != nil {
 		return nil, err
@@ -1043,10 +1084,10 @@ func (m *Manager) AcquireLocksBatch(lockNames []string, holder string, leaseSec 
 			m.rollbackBatchLocked(acquiredLocks, holder)
 			br := result.BudgetCheckResult
 			return &model.BatchAcquireResult{
-				Acquired:        false,
-				FailedLock:      lockName,
-				FailedBy:        fmt.Sprintf("budget exhausted: consumed=%d, limit=%d, remaining=%d", br.ConsumedUnits, br.BudgetLimit, br.RemainingUnits),
-				BudgetRejected:  true,
+				Acquired:          false,
+				FailedLock:        lockName,
+				FailedBy:          fmt.Sprintf("budget exhausted: consumed=%d, limit=%d, remaining=%d", br.ConsumedUnits, br.BudgetLimit, br.RemainingUnits),
+				BudgetRejected:    true,
 				BudgetCheckResult: br,
 			}, nil
 		}
@@ -1079,6 +1120,11 @@ func (m *Manager) AcquireLocksBatch(lockNames []string, holder string, leaseSec 
 }
 
 func (m *Manager) acquireLockNoQueueLocked(lockName, holder string, leaseSec int, reentrant bool) (*AcquireResult, error) {
+	if m.admissionGuard != nil {
+		if err := m.admissionGuard.BeforeAcquire(lockName, holder, leaseSec); err != nil {
+			return nil, err
+		}
+	}
 	if m.budgetMgr != nil {
 		checkResult, err := m.budgetMgr.CheckAcquire(holder, lockName, leaseSec)
 		if err != nil {
@@ -1156,6 +1202,13 @@ func (m *Manager) acquireLockNoQueueLocked(lockName, holder string, leaseSec int
 		AcquiredAt: now,
 		ExpiresAt:  now.Add(time.Duration(leaseSec) * time.Second),
 		Active:     true,
+	}
+	if m.fencingIssuer != nil {
+		token, err := m.fencingIssuer.Issue(lockName, holder, leaseSec, now)
+		if err != nil {
+			return nil, fmt.Errorf("issue fencing token: %w", err)
+		}
+		lease.FencingToken = token
 	}
 	if err := m.storage.CreateLease(lease); err != nil {
 		return nil, err

@@ -6,6 +6,7 @@ import (
 	"os"
 	"task106/internal/api"
 	"task106/internal/audit"
+	"task106/internal/controlplane"
 	"task106/internal/debt"
 	"task106/internal/handover"
 	"task106/internal/heartbeat"
@@ -49,6 +50,12 @@ func main() {
 	defer s.Close()
 
 	mgr := lock.NewManager(s)
+	coordMgr := controlplane.NewManager(s)
+	if err := coordMgr.Start(); err != nil {
+		log.Fatalf("start coordination control plane: %v", err)
+	}
+	mgr.SetAdmissionGuard(coordMgr)
+	mgr.SetFencingIssuer(coordMgr)
 
 	budgetMgr := lockbudget.NewManager(s)
 	if err := budgetMgr.Start(); err != nil {
@@ -190,6 +197,7 @@ func main() {
 	})
 
 	handler := api.NewHandler(mgr, rlMgr, orchMgr, auditMgr, topoMgr, shadowMgr, debtMgr, handoverMgr, heartbeatMgr, heatmapMgr, budgetMgr, rateAlertMgr, reputationMgr)
+	handler.SetControlPlane(coordMgr)
 	handler.RegisterRoutes(r)
 
 	addr := os.Getenv("ADDR")

@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"task106/internal/controlplane"
 	"task106/internal/lock"
 	"task106/internal/storage"
+	"time"
 )
 
 // runSmokeTest exercises the local persistence path without requiring a
@@ -25,6 +27,13 @@ func runSmokeTest() error {
 	}
 
 	manager := lock.NewManager(store)
+	coordination := controlplane.NewManager(store)
+	if err := coordination.Start(); err != nil {
+		store.Close()
+		return fmt.Errorf("start coordination control plane: %w", err)
+	}
+	manager.SetAdmissionGuard(coordination)
+	manager.SetFencingIssuer(coordination)
 	if err := manager.Start(); err != nil {
 		store.Close()
 		return fmt.Errorf("start lock manager: %w", err)
@@ -34,6 +43,13 @@ func runSmokeTest() error {
 		store.Close()
 		return fmt.Errorf("acquire smoke lock: %w", err)
 	}
+	lease, err := manager.GetActiveLease("smoke-lock")
+	if err != nil || lease == nil || lease.FencingToken == "" {
+		manager.Stop()
+		store.Close()
+		return fmt.Errorf("fencing token was not persisted: lease=%+v err=%v", lease, err)
+	}
+	token := lease.FencingToken
 	manager.Stop()
 	if err := store.Close(); err != nil {
 		return fmt.Errorf("close first storage: %w", err)
@@ -45,6 +61,14 @@ func runSmokeTest() error {
 		return fmt.Errorf("reopen storage: %w", err)
 	}
 	defer reopened.Close()
+	restartedCoordination := controlplane.NewManager(reopened)
+	if err := restartedCoordination.Start(); err != nil {
+		return fmt.Errorf("restart coordination control plane: %w", err)
+	}
+	validation := restartedCoordination.ValidateToken(token, "smoke-lock", "smoke-holder", time.Now().UTC())
+	if !validation.Valid {
+		return fmt.Errorf("persisted fencing token failed validation: %+v", validation)
+	}
 	lockState, err := reopened.GetLock("smoke-lock")
 	if err != nil {
 		return fmt.Errorf("read persisted lock: %w", err)
