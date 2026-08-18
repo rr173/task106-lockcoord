@@ -2,12 +2,16 @@ package fencing
 
 import (
 	"task106/internal/model"
+	"task106/internal/namespace"
 	"time"
 )
 
 func NewManager(store Store) *Manager { return &Manager{store: store} }
 
 func (m *Manager) Issue(resourcePath, holder string, leaseSec int, now time.Time) (string, error) {
+	normalized, err := namespace.Normalize(resourcePath)
+	if err != nil { return "", err }
+	resourcePath = normalized
 	if resourcePath == "" || holder == "" || leaseSec <= 0 {
 		return "", ErrTokenMismatch
 	}

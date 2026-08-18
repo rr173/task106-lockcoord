@@ -10,6 +10,9 @@ func Normalize(path string) (string, error) {
 	if path == "" {
 		return "", ErrEmptyPath
 	}
+	if strings.Contains(path, "//") {
+		return "", ErrInvalidPath
+	}
 	parts := strings.Split(path, "/")
 	clean := make([]string, 0, len(parts))
 	for _, part := range parts {
