@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"fmt"
 	"task106/internal/model"
 	"task106/internal/namespace"
 	"time"
@@ -101,7 +102,7 @@ func (m *Manager) Get(path string) (*model.Resource, error) {
 		copy := item
 		return &copy, nil
 	}
-	return nil, ErrNotFound
+	return nil, fmt.Errorf("resource lookup %q: %w", path, ErrNotFound)
 }
 
 func (m *Manager) List(root string) ([]model.Resource, error) {
