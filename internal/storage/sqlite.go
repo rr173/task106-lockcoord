@@ -3772,6 +3772,35 @@ func (s *Storage) TransferOrchTxLockHolder(txID string, newHolder string) error 
 	return err
 }
 
+// TransferOrchTxHolderWithLocks atomically migrates both the orchestration
+// transaction header holder and every one of its lock-detail rows to
+// newHolder. The header and its lock rows are coordination state that must
+// move together: applying one update without the other leaves the
+// transaction half-migrated (header pointing at the new holder while its
+// lock rows still belong to the old one, or vice versa). Both UPDATEs are
+// therefore issued inside a single database transaction so that a failure
+// of either statement rolls back the whole transfer.
+func (s *Storage) TransferOrchTxHolderWithLocks(txID string, newHolder string, updatedAt time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`
+		UPDATE orch_txs SET holder = ?, updated_at = ? WHERE id = ?
+	`, newHolder, updatedAt, txID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		UPDATE orch_tx_locks SET holder = ? WHERE tx_id = ?
+	`, newHolder, txID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 func (s *Storage) TransferReservationCaller(reservationID int64, newCallerID string, updatedAt time.Time) error {
 	_, err := s.db.Exec(`
 		UPDATE rl_reservations SET caller_id = ?, updated_at = ? WHERE id = ?

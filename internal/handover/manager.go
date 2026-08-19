@@ -853,10 +853,12 @@ func (m *Manager) executeOrchTxTransfer(ctx *execContext, item *model.HandoverRe
 	if tx == nil || tx.Holder != h.FromCaller {
 		return fmt.Errorf("tx no longer held by source")
 	}
-	if err := m.storage.TransferOrchTxHolder(item.ResourceKey, h.ToCaller, now); err != nil {
-		return err
-	}
-	if err := m.storage.TransferOrchTxLockHolder(item.ResourceKey, h.ToCaller); err != nil {
+	// The transaction header and its lock-detail rows must migrate together;
+	// a half migration leaves the header pointing at the new holder while
+	// its lock rows still belong to the old one (or vice versa). The storage
+	// layer applies both UPDATEs in a single transaction so that a failure
+	// of either rolls the whole transfer back.
+	if err := m.storage.TransferOrchTxHolderWithLocks(item.ResourceKey, h.ToCaller, now); err != nil {
 		return err
 	}
 	ctx.appliedTxs = append(ctx.appliedTxs, item.ResourceKey)
@@ -885,8 +887,10 @@ func (m *Manager) rollbackAllLocked(ctx *execContext, h *model.Handover, now tim
 		_ = m.storage.TransferReservationCaller(ctx.appliedRes[i], h.FromCaller, now)
 	}
 	for i := len(ctx.appliedTxs) - 1; i >= 0; i-- {
-		_ = m.storage.TransferOrchTxHolder(ctx.appliedTxs[i], h.FromCaller, now)
-		_ = m.storage.TransferOrchTxLockHolder(ctx.appliedTxs[i], h.FromCaller)
+		// Roll the header and its lock rows back together for the same reason
+		// the forward migration does: a partial rollback would leave the
+		// header restored to the source while its lock rows stayed migrated.
+		_ = m.storage.TransferOrchTxHolderWithLocks(ctx.appliedTxs[i], h.FromCaller, now)
 	}
 	for i := len(ctx.appliedLocks) - 1; i >= 0; i-- {
 		lease, _ := m.storage.GetActiveLease(ctx.appliedLocks[i])
