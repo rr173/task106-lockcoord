@@ -5978,3 +5978,15 @@ func (s *Storage) RemoveFromQueueByLock(lockName string) error {
 	_, err := s.db.Exec(`DELETE FROM wait_queue WHERE lock_name = ?`, lockName)
 	return err
 }
+
+
+func (s *Storage) UpdateCallerBindingWithEvent(b *model.CallerBinding, e *model.RateLimitEvent) error {
+    tx, err := s.db.Begin()
+    if err != nil { return err }
+    defer tx.Rollback()
+    allowedInt := 0
+    if e.Allowed { allowedInt = 1 }
+    if _, err = tx.Exec(`INSERT INTO rl_events (caller_id, policy_name, requested, granted, allowed, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, e.CallerID, e.PolicyName, e.Requested, e.Granted, allowedInt, e.Reason, e.CreatedAt); err != nil { return err }
+    if _, err = tx.Exec(`UPDATE rl_caller_bindings SET policy_name=?, quota_limit=?, used_tokens=?, borrowed_tokens=?, lent_tokens=?, reserved_tokens=?, last_refill_at=?, window_start_at=?, prev_window_count=?, curr_window_count=?, updated_at=? WHERE caller_id=?`, b.PolicyName, b.QuotaLimit, b.UsedTokens, b.BorrowedTokens, b.LentTokens, b.ReservedTokens, nullTime(b.LastRefillAt), nullTime(b.WindowStartAt), b.PrevWindowCount, b.CurrWindowCount, b.UpdatedAt, b.CallerID); err != nil { return err }
+    return tx.Commit()
+}

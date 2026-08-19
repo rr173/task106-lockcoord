@@ -608,6 +608,8 @@ func (m *Manager) RequestTokens(callerID string, tokens int, waitable bool, wait
 		remaining = 0
 	}
 
+	prevUsed, prevUpdated := b.UsedTokens, b.UpdatedAt
+
 	result := &model.TokenResult{
 		Requested:  tokens,
 		QuotaLimit: b.QuotaLimit,
@@ -688,9 +690,9 @@ func (m *Manager) RequestTokens(callerID string, tokens int, waitable bool, wait
 		Reason:     result.Reason,
 		CreatedAt:  now,
 	}
-	_ = m.storage.AddRateLimitEvent(event)
-
-	if err := m.storage.UpdateCallerBinding(b); err != nil {
+	if err := m.storage.UpdateCallerBindingWithEvent(b, event); err != nil {
+		b.UsedTokens = prevUsed
+		b.UpdatedAt = prevUpdated
 		return nil, err
 	}
 
