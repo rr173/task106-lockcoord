@@ -347,9 +347,6 @@ func (m *Manager) acquireLockLocked(lockName, holder string, leaseSec int, reent
 	lock.Reentrant = reentrant
 	lock.Count = 1
 	lock.UpdatedAt = now
-	if err := m.storage.UpsertLock(lock); err != nil {
-		return nil, err
-	}
 
 	lease := &model.Lease{
 		LockName:   lockName,
@@ -366,7 +363,7 @@ func (m *Manager) acquireLockLocked(lockName, holder string, leaseSec int, reent
 		}
 		lease.FencingToken = token
 	}
-	if err := m.storage.CreateLease(lease); err != nil {
+	if err := m.storage.AcquireLockWithLease(lock, lease); err != nil {
 		return nil, err
 	}
 
