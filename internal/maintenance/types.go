@@ -10,6 +10,7 @@ type Store interface {
 	CreateMaintenanceWindow(*model.MaintenanceWindow) error
 	ListMaintenanceWindows(string) ([]model.MaintenanceWindow, error)
 	UpdateMaintenanceStatus(int64, string) error
+	UpdateMaintenanceStatusWithEvent(int64, string, string, string, string, string) error
 	RecordCoordinationEvent(string, string, string, string) error
 }
 

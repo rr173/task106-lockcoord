@@ -41,3 +41,15 @@ func (s *Storage) UpdateMaintenanceStatus(id int64, status string) error {
 	}
 	return nil
 }
+
+
+func (s *Storage) UpdateMaintenanceStatusWithEvent(id int64, status, eventType, resourcePath, holder, detail string) error {
+    tx, err := s.db.Begin()
+    if err != nil { return err }
+    defer tx.Rollback()
+    result, err := tx.Exec(`UPDATE coord_maintenance_windows SET status = ? WHERE id = ?`, status, id)
+    if err != nil { return err }
+    if affected, _ := result.RowsAffected(); affected == 0 { return sql.ErrNoRows }
+    if _, err = tx.Exec(`INSERT INTO coordination_events(event_type, resource_path, holder, detail, created_at) VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP)`, eventType, resourcePath, holder, detail); err != nil { return err }
+    return tx.Commit()
+}

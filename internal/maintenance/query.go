@@ -36,12 +36,12 @@ func (m *Manager) Cancel(id int64, operator string) error {
 	if window.Status == "cancelled" || window.Status == "completed" {
 		return ErrWindowClosed
 	}
-	if err := m.store.UpdateMaintenanceStatus(id, "cancelled"); err != nil {
+	if err := m.store.UpdateMaintenanceStatusWithEvent(id, "cancelled", "maintenance_cancelled", window.ResourcePath, operator, window.Reason); err != nil {
 		return err
 	}
 	window.Status = "cancelled"
 	m.mu.Lock()
 	m.windows[id] = window
 	m.mu.Unlock()
-	return m.store.RecordCoordinationEvent("maintenance_cancelled", window.ResourcePath, operator, window.Reason)
+	return nil
 }
