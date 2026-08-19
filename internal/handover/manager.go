@@ -777,20 +777,19 @@ func (m *Manager) executeLockTransfer(ctx *execContext, item *model.HandoverReso
 		return fmt.Errorf("lock no longer held by source")
 	}
 
-	if err := m.storage.TransferLockHolder(item.ResourceKey, h.ToCaller, now); err != nil {
-		return err
-	}
-
 	lease, _ := m.storage.GetActiveLease(item.ResourceKey)
+	newExpires := time.Time{}
+	hasLease := false
 	if lease != nil {
 		remaining := time.Until(lease.ExpiresAt)
 		if remaining < 0 {
 			remaining = 0
 		}
-		newExpires := now.Add(remaining)
-		if err := m.storage.TransferLeaseHolder(item.ResourceKey, h.ToCaller, newExpires, now); err != nil {
-			return err
-		}
+		newExpires = now.Add(remaining)
+		hasLease = true
+	}
+	if err := m.storage.TransferLockAndLeaseHolder(item.ResourceKey, h.ToCaller, newExpires, hasLease, now); err != nil {
+		return err
 	}
 	ctx.appliedLocks = append(ctx.appliedLocks, item.ResourceKey)
 	return nil
