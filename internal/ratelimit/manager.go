@@ -608,6 +608,12 @@ func (m *Manager) RequestTokens(callerID string, tokens int, waitable bool, wait
 		remaining = 0
 	}
 
+	// Snapshot the post-decay quota so a failed usage record can restore it: a
+	// request that cannot persist its usage event must not consume any quota,
+	// otherwise a retried request would be rate-limited for tokens it never got.
+	prevUsed := b.UsedTokens
+	prevUpdated := b.UpdatedAt
+
 	result := &model.TokenResult{
 		Requested:  tokens,
 		QuotaLimit: b.QuotaLimit,
@@ -688,9 +694,17 @@ func (m *Manager) RequestTokens(callerID string, tokens int, waitable bool, wait
 		Reason:     result.Reason,
 		CreatedAt:  now,
 	}
-	_ = m.storage.AddRateLimitEvent(event)
-
-	if err := m.storage.UpdateCallerBinding(b); err != nil {
+	// Persist the usage event and the quota change atomically. If recording the
+	// event fails the quota change is rolled back too, so the consumed quota and
+	// the usage record can never diverge and a failed request consumes no quota.
+	if err := m.storage.RecordTokenUsage(b, event); err != nil {
+		b.UsedTokens = prevUsed
+		b.UpdatedAt = prevUpdated
+		result.UsedTokens = prevUsed
+		result.Remaining = effectiveLim - prevUsed
+		result.Granted = 0
+		result.Allowed = false
+		result.Reason = fmt.Sprintf("record usage failed: %v", err)
 		return nil, err
 	}
 

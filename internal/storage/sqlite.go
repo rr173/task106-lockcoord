@@ -1501,6 +1501,55 @@ func (s *Storage) AddRateLimitEvent(e *model.RateLimitEvent) error {
 	return nil
 }
 
+// RecordTokenUsage persists a rate-limit usage event together with the caller
+// binding's updated quota in a single transaction. Recording the event and the
+// consumed quota must stay consistent: if either write fails the whole
+// transaction is rolled back, so a request whose usage event could not be
+// recorded never leaves the caller with consumed quota that would rate-limit a
+// retried request. On error the caller's in-memory binding must be restored by
+// the caller.
+func (s *Storage) RecordTokenUsage(b *model.CallerBinding, e *model.RateLimitEvent) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	allowedInt := 0
+	if e.Allowed {
+		allowedInt = 1
+	}
+	res, err := tx.Exec(`
+		INSERT INTO rl_events (caller_id, policy_name, requested, granted, allowed, reason, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, e.CallerID, e.PolicyName, e.Requested, e.Granted, allowedInt, e.Reason, e.CreatedAt)
+	if err != nil {
+		return err
+	}
+	e.ID, _ = res.LastInsertId()
+
+	if _, err := tx.Exec(`
+		UPDATE rl_caller_bindings SET
+			policy_name = ?,
+			quota_limit = ?,
+			used_tokens = ?,
+			borrowed_tokens = ?,
+			lent_tokens = ?,
+			reserved_tokens = ?,
+			last_refill_at = ?,
+			window_start_at = ?,
+			prev_window_count = ?,
+			curr_window_count = ?,
+			updated_at = ?
+		WHERE caller_id = ?
+	`, b.PolicyName, b.QuotaLimit, b.UsedTokens, b.BorrowedTokens, b.LentTokens, b.ReservedTokens,
+		nullTime(b.LastRefillAt), nullTime(b.WindowStartAt), b.PrevWindowCount, b.CurrWindowCount, b.UpdatedAt, b.CallerID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 func (s *Storage) ListRateLimitEvents(callerID string, limit int) ([]model.RateLimitEvent, error) {
 	if limit <= 0 {
 		limit = 50
