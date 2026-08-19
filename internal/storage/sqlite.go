@@ -5978,3 +5978,15 @@ func (s *Storage) RemoveFromQueueByLock(lockName string) error {
 	_, err := s.db.Exec(`DELETE FROM wait_queue WHERE lock_name = ?`, lockName)
 	return err
 }
+
+
+func (s *Storage) CancelHandoverWithTimeline(id int64, updatedAt time.Time, reason string, entry *model.HandoverTimelineEntry) error {
+    tx, err := s.db.Begin()
+    if err != nil { return err }
+    defer tx.Rollback()
+    if _, err = tx.Exec(`UPDATE handovers SET status = ?, updated_at = ?, cancelled_at = ?, cancel_reason = ? WHERE id = ?`, model.HandoverStatusCancelled, updatedAt, updatedAt, reason, id); err != nil { return err }
+    result, err := tx.Exec(`INSERT INTO handover_timeline (handover_id, status, operator, detail, created_at) VALUES (?, ?, ?, ?, ?)`, entry.HandoverID, entry.Status, entry.Operator, entry.Detail, entry.CreatedAt)
+    if err != nil { return err }
+    entry.ID, _ = result.LastInsertId()
+    return tx.Commit()
+}

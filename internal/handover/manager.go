@@ -695,11 +695,10 @@ func (m *Manager) cancelHandoverInternal(h *model.Handover, operator, reason str
 	if r == "" {
 		r = "cancelled"
 	}
-	if err := m.storage.UpdateHandoverStatus(h.ID, model.HandoverStatusCancelled, now,
-		"cancelled_at", now, "cancel_reason", r); err != nil {
+	entry := &model.HandoverTimelineEntry{HandoverID: h.ID, Status: model.HandoverStatusCancelled, Operator: operator, Detail: r, CreatedAt: now}
+	if err := m.storage.CancelHandoverWithTimeline(h.ID, now, r, entry); err != nil {
 		return err
 	}
-	m.addTimelineLocked(h.ID, model.HandoverStatusCancelled, operator, r)
 	return nil
 }
 
