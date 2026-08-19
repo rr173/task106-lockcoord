@@ -1156,6 +1156,15 @@ func (s *Storage) UpdateLeaseExpiry(lockName string, newExpiresAt time.Time) err
 	return err
 }
 
+// UpdateLeaseExpiryAndSec 同时更新到期时间与租约时长，保证持久化的 lease_sec
+// 反映封顶后的真实生效时长，与返回值保持一致。
+func (s *Storage) UpdateLeaseExpiryAndSec(lockName string, newExpiresAt time.Time, newLeaseSec int) error {
+	_, err := s.db.Exec(`
+		UPDATE leases SET expires_at = ?, lease_sec = ? WHERE lock_name = ? AND active = 1
+	`, newExpiresAt, newLeaseSec, lockName)
+	return err
+}
+
 func (s *Storage) ListActiveLeases() ([]model.Lease, error) {
 	rows, err := s.db.Query(`
 		SELECT id, lock_name, holder, lease_sec, acquired_at, expires_at, active, fencing_token
