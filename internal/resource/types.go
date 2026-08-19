@@ -28,6 +28,7 @@ type Manager struct {
 type Store interface {
 	ListResources() ([]model.Resource, error)
 	UpsertResource(*model.Resource) error
+	UpsertResourceWithEvent(item *model.Resource, eventType, holder, detail string) error
 	GetResource(string) (*model.Resource, error)
 	ListResourcePolicies() ([]model.ResourcePolicy, error)
 	UpsertResourcePolicy(*model.ResourcePolicy) error

@@ -32,11 +32,14 @@ func (m *Manager) SetState(path string, next model.ResourceState, reason string)
 	item.State = next
 	item.Generation++
 	item.UpdatedAt = time.Now().UTC()
-	if err := m.store.UpsertResource(item); err != nil {
+	// Persist the state change and its coordination event atomically. If the
+	// event write fails the whole transaction rolls back, so the state is never
+	// committed without its event. The in-memory snapshot is only updated once
+	// the transaction commits, keeping it consistent with the persisted state.
+	if err := m.store.UpsertResourceWithEvent(item, "resource_state_changed", item.Owner, fmt.Sprintf("%s: %s", next, reason)); err != nil {
 		return nil, err
 	}
 	m.resources[item.Path] = *item
-	_ = m.store.RecordCoordinationEvent("resource_state_changed", item.Path, item.Owner, fmt.Sprintf("%s: %s", next, reason))
 	return item, nil
 }
 
