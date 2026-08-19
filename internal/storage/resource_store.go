@@ -143,3 +143,20 @@ func (s *Storage) ListCoordinationEvents(resourcePath string, limit int) ([]mode
 	}
 	return result, rows.Err()
 }
+
+
+func (s *Storage) UpsertResourceWithEvent(item *model.Resource, eventType, holder, detail string) error {
+    labels, err := json.Marshal(item.Labels)
+    if err != nil { return err }
+    tx, err := s.db.Begin()
+    if err != nil { return err }
+    defer tx.Rollback()
+    if _, err = tx.Exec(`
+INSERT INTO coord_resources(path, parent_path, owner, state, generation, labels_json, created_at, updated_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(path) DO UPDATE SET parent_path=excluded.parent_path, owner=excluded.owner,
+state=excluded.state, generation=excluded.generation, labels_json=excluded.labels_json, updated_at=excluded.updated_at
+`, item.Path, item.ParentPath, item.Owner, item.State, item.Generation, string(labels), item.CreatedAt, item.UpdatedAt); err != nil { return err }
+    if _, err = tx.Exec(`INSERT INTO coordination_events(event_type, resource_path, holder, detail, created_at) VALUES(?, ?, ?, ?, ?)`, eventType, item.Path, holder, detail, time.Now().UTC()); err != nil { return err }
+    return tx.Commit()
+}
