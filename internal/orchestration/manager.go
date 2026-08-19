@@ -308,8 +308,9 @@ func (m *Manager) ReleaseTx(txID string, callerHolder string) (*model.Orchestrat
 
 	tx.Status = model.TxStatusReleased
 	tx.UpdatedAt = time.Now()
-	_ = m.storage.UpdateOrchTxStatus(txID, model.TxStatusReleased, "", tx.UpdatedAt)
-	m.addStateChangeLocked(txID, model.TxStatusCommitted, model.TxStatusReleased, "manual release")
+	if err := m.storage.UpdateOrchTxStatusWithChange(txID, model.TxStatusCommitted, model.TxStatusReleased, "", "manual release", tx.UpdatedAt); err != nil {
+		return nil, err
+	}
 
 	log.Printf("[orchestration-manager] tx released: tx=%s holder=%s", txID, callerHolder)
 

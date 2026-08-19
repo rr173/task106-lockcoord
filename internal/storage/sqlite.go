@@ -5978,3 +5978,13 @@ func (s *Storage) RemoveFromQueueByLock(lockName string) error {
 	_, err := s.db.Exec(`DELETE FROM wait_queue WHERE lock_name = ?`, lockName)
 	return err
 }
+
+
+func (s *Storage) UpdateOrchTxStatusWithChange(txID string, from, to model.TxStatus, failReason string, reason string, updatedAt time.Time) error {
+    tx, err := s.db.Begin()
+    if err != nil { return err }
+    defer tx.Rollback()
+    if _, err = tx.Exec(`UPDATE orch_txs SET status = ?, fail_reason = ?, updated_at = ? WHERE id = ?`, to, failReason, updatedAt, txID); err != nil { return err }
+    if _, err = tx.Exec(`INSERT INTO orch_tx_state_changes (tx_id, from_state, to_state, reason, created_at) VALUES (?, ?, ?, ?, ?)`, txID, from, to, reason, updatedAt); err != nil { return err }
+    return tx.Commit()
+}
