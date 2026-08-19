@@ -853,10 +853,7 @@ func (m *Manager) executeOrchTxTransfer(ctx *execContext, item *model.HandoverRe
 	if tx == nil || tx.Holder != h.FromCaller {
 		return fmt.Errorf("tx no longer held by source")
 	}
-	if err := m.storage.TransferOrchTxHolder(item.ResourceKey, h.ToCaller, now); err != nil {
-		return err
-	}
-	if err := m.storage.TransferOrchTxLockHolder(item.ResourceKey, h.ToCaller); err != nil {
+	if err := m.storage.TransferOrchTxAndLocksHolder(item.ResourceKey, h.ToCaller, now); err != nil {
 		return err
 	}
 	ctx.appliedTxs = append(ctx.appliedTxs, item.ResourceKey)
