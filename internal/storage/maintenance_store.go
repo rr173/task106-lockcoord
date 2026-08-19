@@ -3,11 +3,35 @@ package storage
 import (
 	"database/sql"
 	"task106/internal/model"
+	"time"
 )
 
 func (s *Storage) CreateMaintenanceWindow(window *model.MaintenanceWindow) error {
 	result, err := s.db.Exec(`INSERT INTO coord_maintenance_windows(resource_path, mode, start_at, end_at, reason, operator, status, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, window.ResourcePath, window.Mode, window.StartAt, window.EndAt, window.Reason, window.Operator, window.Status, window.CreatedAt)
 	if err != nil {
+		return err
+	}
+	window.ID, _ = result.LastInsertId()
+	return nil
+}
+
+// CreateMaintenanceWindowWithEvent persists the maintenance window and its
+// coordination event in a single transaction so that an event-write failure
+// rolls the window back too, leaving no orphaned window behind.
+func (s *Storage) CreateMaintenanceWindowWithEvent(window *model.MaintenanceWindow, eventType, holder, detail string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`INSERT INTO coord_maintenance_windows(resource_path, mode, start_at, end_at, reason, operator, status, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, window.ResourcePath, window.Mode, window.StartAt, window.EndAt, window.Reason, window.Operator, window.Status, window.CreatedAt)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO coordination_events(event_type, resource_path, holder, detail, created_at) VALUES(?, ?, ?, ?, ?)`, eventType, window.ResourcePath, holder, detail, time.Now().UTC()); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 	window.ID, _ = result.LastInsertId()
