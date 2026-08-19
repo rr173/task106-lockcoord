@@ -95,3 +95,13 @@ func (s *Storage) ListFencingTokens(resourcePath string, limit int) ([]model.Fen
 	}
 	return result, rows.Err()
 }
+
+
+func (s *Storage) RevokeFencingTokenWithEvent(token, reason string, now time.Time, eventType, resourcePath, holder, detail string) error {
+    tx, err := s.db.Begin()
+    if err != nil { return err }
+    defer tx.Rollback()
+    if _, err = tx.Exec(`UPDATE coord_fencing_tokens SET revoked_at = ?, revoke_reason = ? WHERE token = ? AND revoked_at IS NULL`, now, reason, token); err != nil { return err }
+    if _, err = tx.Exec(`INSERT INTO coordination_events(event_type, resource_path, holder, detail, created_at) VALUES(?, ?, ?, ?, ?)`, eventType, resourcePath, holder, detail, now); err != nil { return err }
+    return tx.Commit()
+}
