@@ -805,21 +805,20 @@ func (m *Manager) executeQuotaTransfer(ctx *execContext, item *model.HandoverRes
 		return fmt.Errorf("source caller binding not found")
 	}
 
+	toExisted := true
 	toBinding, _ := m.storage.GetCallerBinding(h.ToCaller)
 	if toBinding == nil {
+		toExisted = false
 		toBinding = &model.CallerBinding{
-			CallerID:   h.ToCaller,
-			PolicyName: fromBinding.PolicyName,
-			QuotaLimit: fromBinding.QuotaLimit,
-			UsedTokens: fromBinding.UsedTokens,
+			CallerID:       h.ToCaller,
+			PolicyName:     fromBinding.PolicyName,
+			QuotaLimit:     fromBinding.QuotaLimit,
+			UsedTokens:     fromBinding.UsedTokens,
 			BorrowedTokens: fromBinding.BorrowedTokens,
-			LentTokens: fromBinding.LentTokens,
+			LentTokens:     fromBinding.LentTokens,
 			ReservedTokens: fromBinding.ReservedTokens,
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-		if err := m.storage.UpsertCallerBinding(toBinding); err != nil {
-			return err
+			CreatedAt:      now,
+			UpdatedAt:      now,
 		}
 	} else {
 		toBinding.UsedTokens += fromBinding.UsedTokens
@@ -827,17 +826,18 @@ func (m *Manager) executeQuotaTransfer(ctx *execContext, item *model.HandoverRes
 		toBinding.LentTokens += fromBinding.LentTokens
 		toBinding.ReservedTokens += fromBinding.ReservedTokens
 		toBinding.UpdatedAt = now
-		if err := m.storage.UpdateCallerBinding(toBinding); err != nil {
-			return err
-		}
 	}
 
+	// Source side is zeroed out and persisted together with the receiver in a
+	// single transaction: the handover only takes effect when both sides
+	// update successfully, otherwise both caller bindings keep their original
+	// data (see storage.ApplyQuotaTransfer).
 	fromBinding.UsedTokens = 0
 	fromBinding.BorrowedTokens = 0
 	fromBinding.LentTokens = 0
 	fromBinding.ReservedTokens = 0
 	fromBinding.UpdatedAt = now
-	if err := m.storage.UpdateCallerBinding(fromBinding); err != nil {
+	if err := m.storage.ApplyQuotaTransfer(toBinding, toExisted, fromBinding); err != nil {
 		return err
 	}
 

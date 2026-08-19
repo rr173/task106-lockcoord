@@ -1485,6 +1485,91 @@ func (s *Storage) UpdateCallerBinding(b *model.CallerBinding) error {
 	return err
 }
 
+// ApplyQuotaTransfer atomically persists both sides of a quota handover:
+// the receiver (toBinding) accumulates the source's tokens and the source
+// (fromBinding) is reset to zero. The two writes run in a single transaction,
+// so the handover only takes effect when both updates succeed; if either write
+// fails the transaction is rolled back and both caller bindings keep their
+// original data. toExisted selects the receiver write shape to match the
+// caller's prior persistence path (upsert when the receiver was just created,
+// plain update otherwise).
+func (s *Storage) ApplyQuotaTransfer(toBinding *model.CallerBinding, toExisted bool, fromBinding *model.CallerBinding) error {
+	if toBinding == nil || fromBinding == nil {
+		return fmt.Errorf("quota transfer requires both caller bindings")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if toExisted {
+		if _, err := tx.Exec(`
+			UPDATE rl_caller_bindings SET
+				policy_name = ?,
+				quota_limit = ?,
+				used_tokens = ?,
+				borrowed_tokens = ?,
+				lent_tokens = ?,
+				reserved_tokens = ?,
+				last_refill_at = ?,
+				window_start_at = ?,
+				prev_window_count = ?,
+				curr_window_count = ?,
+				updated_at = ?
+			WHERE caller_id = ?
+		`, toBinding.PolicyName, toBinding.QuotaLimit, toBinding.UsedTokens, toBinding.BorrowedTokens, toBinding.LentTokens, toBinding.ReservedTokens,
+			nullTime(toBinding.LastRefillAt), nullTime(toBinding.WindowStartAt), toBinding.PrevWindowCount, toBinding.CurrWindowCount, toBinding.UpdatedAt, toBinding.CallerID); err != nil {
+			return err
+		}
+	} else {
+		result, err := tx.Exec(`
+			INSERT INTO rl_caller_bindings (caller_id, policy_name, quota_limit, used_tokens, borrowed_tokens, lent_tokens, reserved_tokens, last_refill_at, window_start_at, prev_window_count, curr_window_count, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(caller_id) DO UPDATE SET
+				policy_name = excluded.policy_name,
+				quota_limit = excluded.quota_limit,
+				used_tokens = excluded.used_tokens,
+				borrowed_tokens = excluded.borrowed_tokens,
+				lent_tokens = excluded.lent_tokens,
+				reserved_tokens = excluded.reserved_tokens,
+				last_refill_at = excluded.last_refill_at,
+				window_start_at = excluded.window_start_at,
+				prev_window_count = excluded.prev_window_count,
+				curr_window_count = excluded.curr_window_count,
+				updated_at = excluded.updated_at
+		`, toBinding.CallerID, toBinding.PolicyName, toBinding.QuotaLimit, toBinding.UsedTokens, toBinding.BorrowedTokens, toBinding.LentTokens, toBinding.ReservedTokens,
+			nullTime(toBinding.LastRefillAt), nullTime(toBinding.WindowStartAt), toBinding.PrevWindowCount, toBinding.CurrWindowCount, toBinding.CreatedAt, toBinding.UpdatedAt)
+		if err != nil {
+			return err
+		}
+		if toBinding.ID == 0 {
+			toBinding.ID, _ = result.LastInsertId()
+		}
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE rl_caller_bindings SET
+			policy_name = ?,
+			quota_limit = ?,
+			used_tokens = ?,
+			borrowed_tokens = ?,
+			lent_tokens = ?,
+			reserved_tokens = ?,
+			last_refill_at = ?,
+			window_start_at = ?,
+			prev_window_count = ?,
+			curr_window_count = ?,
+			updated_at = ?
+		WHERE caller_id = ?
+	`, fromBinding.PolicyName, fromBinding.QuotaLimit, fromBinding.UsedTokens, fromBinding.BorrowedTokens, fromBinding.LentTokens, fromBinding.ReservedTokens,
+		nullTime(fromBinding.LastRefillAt), nullTime(fromBinding.WindowStartAt), fromBinding.PrevWindowCount, fromBinding.CurrWindowCount, fromBinding.UpdatedAt, fromBinding.CallerID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 func (s *Storage) AddRateLimitEvent(e *model.RateLimitEvent) error {
 	allowedInt := 0
 	if e.Allowed {
