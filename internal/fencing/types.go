@@ -11,6 +11,7 @@ type Store interface {
 	GetFencingToken(string) (*model.FencingToken, error)
 	CurrentFencingSequence(string) (int64, error)
 	RevokeFencingToken(string, string, time.Time) error
+	RevokeFencingTokenWithEvent(token, reason string, now time.Time, resourcePath, holder string) error
 	ListFencingTokens(string, int) ([]model.FencingToken, error)
 	RecordCoordinationEvent(string, string, string, string) error
 }

@@ -71,6 +71,25 @@ func (s *Storage) RevokeFencingToken(token, reason string, now time.Time) error 
 	return err
 }
 
+// RevokeFencingTokenWithEvent marks the token revoked and writes the
+// coordination event in a single transaction so that a failure writing the
+// event rolls back the token revocation as a whole. The token must never be
+// left revoked when its revocation event could not be recorded.
+func (s *Storage) RevokeFencingTokenWithEvent(token, reason string, now time.Time, resourcePath, holder string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE coord_fencing_tokens SET revoked_at = ?, revoke_reason = ? WHERE token = ? AND revoked_at IS NULL`, now, reason, token); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO coordination_events(event_type, resource_path, holder, detail, created_at) VALUES(?, ?, ?, ?, ?)`, "fencing_revoked", resourcePath, holder, reason, time.Now().UTC()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Storage) ListFencingTokens(resourcePath string, limit int) ([]model.FencingToken, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
