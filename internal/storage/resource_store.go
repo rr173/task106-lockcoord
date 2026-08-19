@@ -143,3 +143,22 @@ func (s *Storage) ListCoordinationEvents(resourcePath string, limit int) ([]mode
 	}
 	return result, rows.Err()
 }
+
+
+func (s *Storage) UpsertResourcePolicyWithEvent(policy *model.ResourcePolicy, eventType, holder, detail string) error {
+    holders, err := json.Marshal(policy.AllowedHolders)
+    if err != nil { return err }
+    fencing := 0
+    if policy.RequireFencing { fencing = 1 }
+    tx, err := s.db.Begin()
+    if err != nil { return err }
+    defer tx.Rollback()
+    if _, err = tx.Exec(`
+INSERT INTO coord_resource_policies(path, max_lease_sec, required_holder, priority, require_fencing, allowed_holders_json, updated_at)
+VALUES(?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(path) DO UPDATE SET max_lease_sec=excluded.max_lease_sec, required_holder=excluded.required_holder,
+priority=excluded.priority, require_fencing=excluded.require_fencing, allowed_holders_json=excluded.allowed_holders_json, updated_at=excluded.updated_at
+`, policy.Path, policy.MaxLeaseSec, policy.RequiredHolder, policy.Priority, fencing, string(holders), policy.UpdatedAt); err != nil { return err }
+    if _, err = tx.Exec(`INSERT INTO coordination_events(event_type, resource_path, holder, detail, created_at) VALUES(?, ?, ?, ?, ?)`, eventType, policy.Path, holder, detail, time.Now().UTC()); err != nil { return err }
+    return tx.Commit()
+}

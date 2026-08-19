@@ -22,13 +22,12 @@ func (m *Manager) SetPolicy(path string, policy model.ResourcePolicy) (*model.Re
 	}
 	policy.Path = path
 	policy.UpdatedAt = time.Now().UTC()
-	if err := m.store.UpsertResourcePolicy(&policy); err != nil {
+	if err := m.store.UpsertResourcePolicyWithEvent(&policy, "resource_policy_changed", policy.RequiredHolder, "policy updated"); err != nil {
 		return nil, err
 	}
 	m.mu.Lock()
 	m.policies[path] = policy
 	m.mu.Unlock()
-	_ = m.store.RecordCoordinationEvent("resource_policy_changed", path, policy.RequiredHolder, "policy updated")
 	return &policy, nil
 }
 
