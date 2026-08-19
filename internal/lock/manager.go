@@ -1279,8 +1279,10 @@ func (m *Manager) ShortenLease(lockName string, newLeaseSec int) (*model.Lease, 
 	if newExpiresAt.After(lease.ExpiresAt) {
 		newExpiresAt = lease.ExpiresAt
 	}
+	actualLeaseSec := int(newExpiresAt.Sub(now).Seconds())
+	if actualLeaseSec < 0 { actualLeaseSec = 0 }
 
-	if err := m.storage.UpdateLeaseExpiry(lockName, newExpiresAt); err != nil {
+	if err := m.storage.UpdateLeaseExpiryAndDuration(lockName, newExpiresAt, actualLeaseSec); err != nil {
 		return nil, err
 	}
 
@@ -1288,7 +1290,7 @@ func (m *Manager) ShortenLease(lockName string, newLeaseSec int) (*model.Lease, 
 	m.setLeaseTimerLocked(lockName, remaining)
 
 	lease.ExpiresAt = newExpiresAt
-	lease.LeaseSec = newLeaseSec
+	lease.LeaseSec = actualLeaseSec
 	fillLeaseRemaining(lease)
 
 	if m.heatmapMgr != nil {

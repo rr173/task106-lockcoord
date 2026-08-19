@@ -1156,6 +1156,11 @@ func (s *Storage) UpdateLeaseExpiry(lockName string, newExpiresAt time.Time) err
 	return err
 }
 
+func (s *Storage) UpdateLeaseExpiryAndDuration(lockName string, newExpiresAt time.Time, leaseSec int) error {
+	_, err := s.db.Exec(`UPDATE leases SET expires_at = ?, lease_sec = ? WHERE lock_name = ? AND active = 1`, newExpiresAt, leaseSec, lockName)
+	return err
+}
+
 func (s *Storage) ListActiveLeases() ([]model.Lease, error) {
 	rows, err := s.db.Query(`
 		SELECT id, lock_name, holder, lease_sec, acquired_at, expires_at, active, fencing_token
