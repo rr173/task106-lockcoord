@@ -5978,3 +5978,17 @@ func (s *Storage) RemoveFromQueueByLock(lockName string) error {
 	_, err := s.db.Exec(`DELETE FROM wait_queue WHERE lock_name = ?`, lockName)
 	return err
 }
+
+
+func (s *Storage) TransferCallerBindingBalances(fromB, toB *model.CallerBinding) error {
+    tx, err := s.db.Begin()
+    if err != nil { return err }
+    defer tx.Rollback()
+    if _, err = tx.Exec(`
+        INSERT INTO rl_caller_bindings (caller_id, policy_name, quota_limit, used_tokens, borrowed_tokens, lent_tokens, reserved_tokens, last_refill_at, window_start_at, prev_window_count, curr_window_count, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(caller_id) DO UPDATE SET policy_name=excluded.policy_name, quota_limit=excluded.quota_limit, used_tokens=excluded.used_tokens, borrowed_tokens=excluded.borrowed_tokens, lent_tokens=excluded.lent_tokens, reserved_tokens=excluded.reserved_tokens, last_refill_at=excluded.last_refill_at, window_start_at=excluded.window_start_at, prev_window_count=excluded.prev_window_count, curr_window_count=excluded.curr_window_count, updated_at=excluded.updated_at
+    `, toB.CallerID, toB.PolicyName, toB.QuotaLimit, toB.UsedTokens, toB.BorrowedTokens, toB.LentTokens, toB.ReservedTokens, nullTime(toB.LastRefillAt), nullTime(toB.WindowStartAt), toB.PrevWindowCount, toB.CurrWindowCount, toB.CreatedAt, toB.UpdatedAt); err != nil { return err }
+    if _, err = tx.Exec(`UPDATE rl_caller_bindings SET policy_name=?, quota_limit=?, used_tokens=?, borrowed_tokens=?, lent_tokens=?, reserved_tokens=?, last_refill_at=?, window_start_at=?, prev_window_count=?, curr_window_count=?, updated_at=? WHERE caller_id=?`, fromB.PolicyName, fromB.QuotaLimit, fromB.UsedTokens, fromB.BorrowedTokens, fromB.LentTokens, fromB.ReservedTokens, nullTime(fromB.LastRefillAt), nullTime(fromB.WindowStartAt), fromB.PrevWindowCount, fromB.CurrWindowCount, fromB.UpdatedAt, fromB.CallerID); err != nil { return err }
+    return tx.Commit()
+}

@@ -807,37 +807,19 @@ func (m *Manager) executeQuotaTransfer(ctx *execContext, item *model.HandoverRes
 
 	toBinding, _ := m.storage.GetCallerBinding(h.ToCaller)
 	if toBinding == nil {
-		toBinding = &model.CallerBinding{
-			CallerID:   h.ToCaller,
-			PolicyName: fromBinding.PolicyName,
-			QuotaLimit: fromBinding.QuotaLimit,
-			UsedTokens: fromBinding.UsedTokens,
-			BorrowedTokens: fromBinding.BorrowedTokens,
-			LentTokens: fromBinding.LentTokens,
-			ReservedTokens: fromBinding.ReservedTokens,
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-		if err := m.storage.UpsertCallerBinding(toBinding); err != nil {
-			return err
-		}
-	} else {
-		toBinding.UsedTokens += fromBinding.UsedTokens
-		toBinding.BorrowedTokens += fromBinding.BorrowedTokens
-		toBinding.LentTokens += fromBinding.LentTokens
-		toBinding.ReservedTokens += fromBinding.ReservedTokens
-		toBinding.UpdatedAt = now
-		if err := m.storage.UpdateCallerBinding(toBinding); err != nil {
-			return err
-		}
+		toBinding = &model.CallerBinding{CallerID: h.ToCaller, PolicyName: fromBinding.PolicyName, QuotaLimit: fromBinding.QuotaLimit, CreatedAt: now}
 	}
-
+	toBinding.UsedTokens += fromBinding.UsedTokens
+	toBinding.BorrowedTokens += fromBinding.BorrowedTokens
+	toBinding.LentTokens += fromBinding.LentTokens
+	toBinding.ReservedTokens += fromBinding.ReservedTokens
+	toBinding.UpdatedAt = now
 	fromBinding.UsedTokens = 0
 	fromBinding.BorrowedTokens = 0
 	fromBinding.LentTokens = 0
 	fromBinding.ReservedTokens = 0
 	fromBinding.UpdatedAt = now
-	if err := m.storage.UpdateCallerBinding(fromBinding); err != nil {
+	if err := m.storage.TransferCallerBindingBalances(fromBinding, toBinding); err != nil {
 		return err
 	}
 
