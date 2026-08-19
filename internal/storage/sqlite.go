@@ -1068,12 +1068,18 @@ func (s *Storage) GetLock(name string) (*model.Lock, error) {
 	return &l, nil
 }
 
-func (s *Storage) UpsertLock(l *model.Lock) error {
+// dbExecer is satisfied by both *sql.DB and *sql.Tx, which lets the lock/lease
+// writes run either directly on the connection or inside a transaction.
+type dbExecer interface {
+	Exec(query string, args ...interface{}) (sql.Result, error)
+}
+
+func upsertLockExec(db dbExecer, l *model.Lock) error {
 	reentrantInt := 0
 	if l.Reentrant {
 		reentrantInt = 1
 	}
-	_, err := s.db.Exec(`
+	_, err := db.Exec(`
 		INSERT INTO locks (name, status, holder, reentrant, count, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
@@ -1084,6 +1090,10 @@ func (s *Storage) UpsertLock(l *model.Lock) error {
 			updated_at = excluded.updated_at
 	`, l.Name, l.Status, l.Holder, reentrantInt, l.Count, l.CreatedAt, l.UpdatedAt)
 	return err
+}
+
+func (s *Storage) UpsertLock(l *model.Lock) error {
+	return upsertLockExec(s.db, l)
 }
 
 func (s *Storage) ListLocks() ([]model.Lock, error) {
@@ -1129,11 +1139,15 @@ func (s *Storage) GetActiveLease(lockName string) (*model.Lease, error) {
 }
 
 func (s *Storage) CreateLease(l *model.Lease) error {
+	return createLeaseExec(s.db, l)
+}
+
+func createLeaseExec(db dbExecer, l *model.Lease) error {
 	activeInt := 0
 	if l.Active {
 		activeInt = 1
 	}
-	result, err := s.db.Exec(`
+	result, err := db.Exec(`
 		INSERT INTO leases (lock_name, holder, lease_sec, acquired_at, expires_at, active, fencing_token)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`, l.LockName, l.Holder, l.LeaseSec, l.AcquiredAt, l.ExpiresAt, activeInt, l.FencingToken)
@@ -1142,6 +1156,26 @@ func (s *Storage) CreateLease(l *model.Lease) error {
 	}
 	l.ID, _ = result.LastInsertId()
 	return nil
+}
+
+// AcquireLockAndLease atomically marks the lock held and creates its active
+// lease in a single transaction. The lock write and the lease insert commit
+// together: if the lease cannot be written the lock write is rolled back, so an
+// acquisition can never leave a lock occupied without a corresponding lease.
+func (s *Storage) AcquireLockAndLease(l *model.Lock, lease *model.Lease) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if err := upsertLockExec(tx, l); err != nil {
+		return err
+	}
+	if err := createLeaseExec(tx, lease); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Storage) DeactivateLease(lockName string) error {
