@@ -21,21 +21,25 @@ func (m *Manager) Run(scope string) (*model.RecoveryCheckpoint, error) {
 	}
 	issues, err := m.scanIssues()
 	if err != nil {
-		_ = m.store.FinishRecoveryCheckpoint(checkpoint.ID, "failed", []string{err.Error()}, time.Now().UTC())
+		// Persist the failure result and the inspection event together; if the
+		// event write fails the checkpoint is rolled back to "running" so the
+		// next inspection resumes from a correct state. The scan error remains
+		// the primary failure reported to the caller.
+		finished := time.Now().UTC()
+		_ = m.store.FinishRecoveryCheckpointWithEvent(checkpoint.ID, "failed", []string{err.Error()}, finished, "recovery_checkpoint", scope, "", "failed")
 		return nil, err
 	}
 	status := "healthy"
 	if len(issues) > 0 {
 		status = "attention"
 	}
-	if err := m.store.FinishRecoveryCheckpoint(checkpoint.ID, status, issues, time.Now().UTC()); err != nil {
+	finished := time.Now().UTC()
+	if err := m.store.FinishRecoveryCheckpointWithEvent(checkpoint.ID, status, issues, finished, "recovery_checkpoint", scope, "", status); err != nil {
 		return nil, err
 	}
 	checkpoint.Status = status
 	checkpoint.Issues = issues
-	finished := time.Now().UTC()
 	checkpoint.FinishedAt = &finished
-	_ = m.store.RecordCoordinationEvent("recovery_checkpoint", scope, "", status)
 	return checkpoint, nil
 }
 
