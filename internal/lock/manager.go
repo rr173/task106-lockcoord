@@ -445,12 +445,10 @@ func (m *Manager) releaseLockLocked(lockName, holder string) (*ReleaseResult, er
 		_ = units
 	}
 
-	m.stopLeaseTimerLocked(lockName)
-
-	if err := m.storage.DeactivateLease(lockName); err != nil {
-		return nil, err
-	}
-
+	// Flip the lock to free before touching the lease. If making the lock
+	// available fails, the lease must stay active so we never end up with a
+	// held lock and no valid lease. The lease timer is left armed too, so a
+	// failed release leaves lock + lease exactly as they were.
 	lock.Status = model.LockStatusFree
 	lock.Holder = ""
 	lock.Count = 0
@@ -458,6 +456,22 @@ func (m *Manager) releaseLockLocked(lockName, holder string) (*ReleaseResult, er
 	if err := m.storage.UpsertLock(lock); err != nil {
 		return nil, err
 	}
+
+	// The lock is free now; deactivate the lease to match. Should that fail,
+	// roll the lock back to held so the two stay consistent instead of leaving
+	// a free lock with a dangling active lease.
+	if err := m.storage.DeactivateLease(lockName); err != nil {
+		lock.Status = model.LockStatusHeld
+		lock.Holder = holder
+		lock.Count = 1
+		lock.UpdatedAt = releaseTime
+		if rbErr := m.storage.UpsertLock(lock); rbErr != nil {
+			log.Printf("[lock-manager] rollback lock to held after lease deactivation failure: lock=%s err=%v", lockName, rbErr)
+		}
+		return nil, err
+	}
+
+	m.stopLeaseTimerLocked(lockName)
 
 	m.addHistoryLocked(lockName, holder, model.OpRelease, "released")
 
