@@ -1900,6 +1900,38 @@ func (s *Storage) UpdateOrchTxStatus(txID string, status model.TxStatus, failRea
 	return err
 }
 
+// TransitionOrchTxStatus atomically moves a transaction to a new status and
+// appends the matching state-change record in a single database transaction.
+// Both writes commit or roll back together, so the persisted status and its
+// audit trail can never diverge: if recording the state change fails (for
+// example a trigger rejection) the previous status is preserved and the error
+// is returned to the caller, who must not treat the transition as applied.
+func (s *Storage) TransitionOrchTxStatus(txID string, from, to model.TxStatus, failReason, reason string, updatedAt time.Time) error {
+	dbTx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer dbTx.Rollback()
+
+	if _, err := dbTx.Exec(`
+		UPDATE orch_txs SET status = ?, fail_reason = ?, updated_at = ? WHERE id = ?
+	`, to, failReason, updatedAt, txID); err != nil {
+		return coordinationError("update tx status", err)
+	}
+
+	if _, err := dbTx.Exec(`
+		INSERT INTO orch_tx_state_changes (tx_id, from_state, to_state, reason, created_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, txID, from, to, reason, updatedAt); err != nil {
+		return coordinationError("record tx state change", err)
+	}
+
+	if err := dbTx.Commit(); err != nil {
+		return coordinationError("commit tx status transition", err)
+	}
+	return nil
+}
+
 func (s *Storage) GetOrchTx(txID string) (*model.OrchestrationTx, error) {
 	row := s.db.QueryRow(`
 		SELECT id, holder, status, timeout_sec, fail_reason, created_at, updated_at, expires_at

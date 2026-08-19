@@ -300,16 +300,22 @@ func (m *Manager) ReleaseTx(txID string, callerHolder string) (*model.Orchestrat
 		return nil, err
 	}
 
+	// Persist the released status and its audit record as a single atomic
+	// transition: if the state-change record cannot be written, the
+	// transaction status must not change, so the release result and the
+	// recorded history can never diverge. Held locks are only freed once the
+	// transition has been durably committed; otherwise the transaction stays
+	// in its committed state with its locks and timer untouched.
+	updatedAt := time.Now()
+	if err := m.storage.TransitionOrchTxStatus(txID, model.TxStatusCommitted, model.TxStatusReleased, "", "manual release", updatedAt); err != nil {
+		return nil, fmt.Errorf("release transaction %s: %w", txID, err)
+	}
+
 	for _, l := range locks {
 		_, _ = m.lockMgr.ReleaseLock(l.LockName, l.Holder)
 	}
 
 	m.stopTxTimerLocked(txID)
-
-	tx.Status = model.TxStatusReleased
-	tx.UpdatedAt = time.Now()
-	_ = m.storage.UpdateOrchTxStatus(txID, model.TxStatusReleased, "", tx.UpdatedAt)
-	m.addStateChangeLocked(txID, model.TxStatusCommitted, model.TxStatusReleased, "manual release")
 
 	log.Printf("[orchestration-manager] tx released: tx=%s holder=%s", txID, callerHolder)
 
