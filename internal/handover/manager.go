@@ -695,12 +695,10 @@ func (m *Manager) cancelHandoverInternal(h *model.Handover, operator, reason str
 	if r == "" {
 		r = "cancelled"
 	}
-	if err := m.storage.UpdateHandoverStatus(h.ID, model.HandoverStatusCancelled, now,
-		"cancelled_at", now, "cancel_reason", r); err != nil {
-		return err
-	}
-	m.addTimelineLocked(h.ID, model.HandoverStatusCancelled, operator, r)
-	return nil
+	// The status change and its timeline record must commit together. If writing
+	// the timeline fails the whole transition is rolled back so the handover
+	// keeps its prior status instead of appearing cancelled with no audit trail.
+	return m.storage.CancelHandoverAtomic(h.ID, now, r, operator)
 }
 
 type execContext struct {

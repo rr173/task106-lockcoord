@@ -3691,6 +3691,35 @@ func (s *Storage) AddHandoverTimeline(entry *model.HandoverTimelineEntry) error 
 	return nil
 }
 
+// CancelHandoverAtomic moves a handover into the cancelled status and appends
+// the matching timeline entry inside a single transaction. The status change
+// and its audit trail must commit together: if the timeline write fails the
+// status update is rolled back so the handover keeps its previous status and no
+// orphaned cancellation record is left behind for callers to query later.
+func (s *Storage) CancelHandoverAtomic(id int64, now time.Time, reason, operator string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`
+		UPDATE handovers SET status = ?, updated_at = ?, cancelled_at = ?, cancel_reason = ?
+		WHERE id = ?
+	`, model.HandoverStatusCancelled, now, now, reason, id); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`
+		INSERT INTO handover_timeline (handover_id, status, operator, detail, created_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, id, model.HandoverStatusCancelled, operator, reason, now); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 func (s *Storage) ListHandoverTimeline(handoverID int64) ([]model.HandoverTimelineEntry, error) {
 	rows, err := s.db.Query(`
 		SELECT id, handover_id, status, operator, detail, created_at
