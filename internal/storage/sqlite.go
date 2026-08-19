@@ -5978,3 +5978,15 @@ func (s *Storage) RemoveFromQueueByLock(lockName string) error {
 	_, err := s.db.Exec(`DELETE FROM wait_queue WHERE lock_name = ?`, lockName)
 	return err
 }
+
+
+func (s *Storage) ReleaseLockAndDeactivateLease(lockName string, l *model.Lock) error {
+    tx, err := s.db.Begin()
+    if err != nil { return err }
+    defer tx.Rollback()
+    if _, err = tx.Exec(`UPDATE leases SET active = 0 WHERE lock_name = ? AND active = 1`, lockName); err != nil { return err }
+    reentrantInt := 0
+    if l.Reentrant { reentrantInt = 1 }
+    if _, err = tx.Exec(`INSERT INTO locks (name, status, holder, reentrant, count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET status=excluded.status, holder=excluded.holder, reentrant=excluded.reentrant, count=excluded.count, updated_at=excluded.updated_at`, l.Name, l.Status, l.Holder, reentrantInt, l.Count, l.CreatedAt, l.UpdatedAt); err != nil { return err }
+    return tx.Commit()
+}

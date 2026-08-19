@@ -447,15 +447,11 @@ func (m *Manager) releaseLockLocked(lockName, holder string) (*ReleaseResult, er
 
 	m.stopLeaseTimerLocked(lockName)
 
-	if err := m.storage.DeactivateLease(lockName); err != nil {
-		return nil, err
-	}
-
 	lock.Status = model.LockStatusFree
 	lock.Holder = ""
 	lock.Count = 0
 	lock.UpdatedAt = releaseTime
-	if err := m.storage.UpsertLock(lock); err != nil {
+	if err := m.storage.ReleaseLockAndDeactivateLease(lockName, lock); err != nil {
 		return nil, err
 	}
 
