@@ -20,6 +20,10 @@ func (m *Manager) Issue(resourcePath, holder string, leaseSec int, now time.Time
 		return "", err
 	}
 	if err := m.store.RecordCoordinationEvent("fencing_issued", resourcePath, holder, token.Token); err != nil {
+		// 协调事件写入失败：回滚已签发的令牌，确保整个签发操作失败且不留下可见令牌。
+		if dErr := m.store.DeleteFencingToken(token.Token); dErr != nil {
+			return "", dErr
+		}
 		return "", err
 	}
 	return token.Token, nil

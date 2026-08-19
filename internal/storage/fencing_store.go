@@ -35,6 +35,11 @@ func (s *Storage) InsertFencingToken(item *model.FencingToken) error {
 	return err
 }
 
+func (s *Storage) DeleteFencingToken(token string) error {
+	_, err := s.db.Exec(`DELETE FROM coord_fencing_tokens WHERE token = ?`, token)
+	return err
+}
+
 func (s *Storage) GetFencingToken(token string) (*model.FencingToken, error) {
 	row := s.db.QueryRow(`SELECT token, resource_path, holder, sequence, issued_at, expires_at, revoked_at, revoke_reason FROM coord_fencing_tokens WHERE token = ?`, token)
 	var item model.FencingToken

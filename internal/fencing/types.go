@@ -8,6 +8,7 @@ import (
 type Store interface {
 	NextFencingSequence(string) (int64, error)
 	InsertFencingToken(*model.FencingToken) error
+	DeleteFencingToken(string) error
 	GetFencingToken(string) (*model.FencingToken, error)
 	CurrentFencingSequence(string) (int64, error)
 	RevokeFencingToken(string, string, time.Time) error
