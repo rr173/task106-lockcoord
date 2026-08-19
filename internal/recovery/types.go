@@ -8,6 +8,7 @@ import (
 type Store interface {
 	CreateRecoveryCheckpoint(*model.RecoveryCheckpoint) error
 	FinishRecoveryCheckpoint(int64, string, []string, time.Time) error
+	FinishRecoveryCheckpointWithEvent(int64, string, []string, time.Time, string, string, string, string) error
 	GetRecoveryCheckpoint(int64) (*model.RecoveryCheckpoint, error)
 	ListRecoveryCheckpoints(string, int) ([]model.RecoveryCheckpoint, error)
 	RecordCoordinationEvent(string, string, string, string) error

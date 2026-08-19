@@ -28,14 +28,13 @@ func (m *Manager) Run(scope string) (*model.RecoveryCheckpoint, error) {
 	if len(issues) > 0 {
 		status = "attention"
 	}
-	if err := m.store.FinishRecoveryCheckpoint(checkpoint.ID, status, issues, time.Now().UTC()); err != nil {
+	finished := time.Now().UTC()
+	if err := m.store.FinishRecoveryCheckpointWithEvent(checkpoint.ID, status, issues, finished, "recovery_checkpoint", scope, "", status); err != nil {
 		return nil, err
 	}
 	checkpoint.Status = status
 	checkpoint.Issues = issues
-	finished := time.Now().UTC()
 	checkpoint.FinishedAt = &finished
-	_ = m.store.RecordCoordinationEvent("recovery_checkpoint", scope, "", status)
 	return checkpoint, nil
 }
 

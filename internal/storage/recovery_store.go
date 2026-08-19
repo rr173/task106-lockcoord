@@ -75,3 +75,15 @@ func scanRecoveryCheckpoint(row interface{ Scan(...any) error }) (*model.Recover
 	}
 	return &item, nil
 }
+
+
+func (s *Storage) FinishRecoveryCheckpointWithEvent(id int64, status string, issues []string, finished time.Time, eventType, scope, holder, detail string) error {
+    encoded, err := json.Marshal(issues)
+    if err != nil { return err }
+    tx, err := s.db.Begin()
+    if err != nil { return err }
+    defer tx.Rollback()
+    if _, err = tx.Exec(`UPDATE coord_recovery_checkpoints SET status = ?, finished_at = ?, issues_json = ? WHERE id = ?`, status, finished, string(encoded), id); err != nil { return err }
+    if _, err = tx.Exec(`INSERT INTO coordination_events(event_type, resource_path, holder, detail, created_at) VALUES(?, ?, ?, ?, ?)`, eventType, scope, holder, detail, finished); err != nil { return err }
+    return tx.Commit()
+}
