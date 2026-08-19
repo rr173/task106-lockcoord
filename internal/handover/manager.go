@@ -777,21 +777,26 @@ func (m *Manager) executeLockTransfer(ctx *execContext, item *model.HandoverReso
 		return fmt.Errorf("lock no longer held by source")
 	}
 
-	if err := m.storage.TransferLockHolder(item.ResourceKey, h.ToCaller, now); err != nil {
-		return err
-	}
-
+	// Compute the expiry the migrated lease should carry so the receiver keeps
+	// the source's remaining lease window. If there is no active lease, the
+	// atomic update below simply leaves no lease row to update.
+	newExpires := now
 	lease, _ := m.storage.GetActiveLease(item.ResourceKey)
 	if lease != nil {
 		remaining := time.Until(lease.ExpiresAt)
 		if remaining < 0 {
 			remaining = 0
 		}
-		newExpires := now.Add(remaining)
-		if err := m.storage.TransferLeaseHolder(item.ResourceKey, h.ToCaller, newExpires, now); err != nil {
-			return err
-		}
+		newExpires = now.Add(remaining)
 	}
+
+	// Move the lock holder and the lease holder together in one transaction.
+	// If the lease transfer fails, the whole transaction rolls back and the
+	// lock holder stays with the source — no half-completed migration.
+	if err := m.storage.TransferLockAndLease(item.ResourceKey, h.ToCaller, newExpires, now); err != nil {
+		return err
+	}
+
 	ctx.appliedLocks = append(ctx.appliedLocks, item.ResourceKey)
 	return nil
 }

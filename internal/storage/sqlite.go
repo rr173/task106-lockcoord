@@ -3758,6 +3758,36 @@ func (s *Storage) TransferLeaseHolder(lockName string, newHolder string, newExpi
 	return err
 }
 
+// TransferLockAndLease atomically moves both the lock holder and the active
+// lease holder to newHolder in a single transaction. If the lease update fails
+// (for example a BEFORE UPDATE trigger on leases that aborts), the transaction
+// is rolled back so the lock holder is left unchanged — leaving no
+// half-completed migration where the lock has moved but the lease has not.
+// newLeaseExpiresAt is the expiry the transferred lease should take on; when
+// there is no active lease this value is simply not applied to any row.
+func (s *Storage) TransferLockAndLease(lockName, newHolder string, newLeaseExpiresAt time.Time, updatedAt time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`
+		UPDATE locks SET holder = ?, updated_at = ? WHERE name = ?
+	`, newHolder, updatedAt, lockName); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE leases SET holder = ?, expires_at = ?, active = 1
+		WHERE lock_name = ? AND active = 1
+	`, newHolder, newLeaseExpiresAt, lockName); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 func (s *Storage) TransferOrchTxHolder(txID string, newHolder string, updatedAt time.Time) error {
 	_, err := s.db.Exec(`
 		UPDATE orch_txs SET holder = ?, updated_at = ? WHERE id = ?
