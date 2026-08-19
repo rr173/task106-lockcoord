@@ -123,6 +123,39 @@ func (s *Storage) RecordCoordinationEvent(eventType, resourcePath, holder, detai
 	return err
 }
 
+// UpsertResourcePolicyWithEvent persists a resource policy and records the
+// associated coordination event within a single transaction. If either write
+// fails the whole transaction is rolled back, so a policy is never committed
+// without its coordination event (and vice versa).
+func (s *Storage) UpsertResourcePolicyWithEvent(policy *model.ResourcePolicy, eventType, holder, detail string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	holders, err := json.Marshal(policy.AllowedHolders)
+	if err != nil {
+		return err
+	}
+	fencing := 0
+	if policy.RequireFencing {
+		fencing = 1
+	}
+	if _, err := tx.Exec(`
+INSERT INTO coord_resource_policies(path, max_lease_sec, required_holder, priority, require_fencing, allowed_holders_json, updated_at)
+VALUES(?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(path) DO UPDATE SET max_lease_sec=excluded.max_lease_sec, required_holder=excluded.required_holder,
+priority=excluded.priority, require_fencing=excluded.require_fencing, allowed_holders_json=excluded.allowed_holders_json, updated_at=excluded.updated_at
+`, policy.Path, policy.MaxLeaseSec, policy.RequiredHolder, policy.Priority, fencing, string(holders), policy.UpdatedAt); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO coordination_events(event_type, resource_path, holder, detail, created_at) VALUES(?, ?, ?, ?, ?)`, eventType, policy.Path, holder, detail, time.Now().UTC()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Storage) ListCoordinationEvents(resourcePath string, limit int) ([]model.CoordinationEvent, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
