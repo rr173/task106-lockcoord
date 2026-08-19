@@ -470,6 +470,26 @@ func (m *Manager) releaseLockLocked(lockName, holder string) (*ReleaseResult, er
 }
 
 func (m *Manager) tryGrantNextLocked(lockName string) (*model.Lock, error) {
+	front, err := m.storage.FrontWaitQueue(lockName)
+	if err != nil {
+		return nil, err
+	}
+	if front == nil {
+		return nil, nil
+	}
+
+	// A waiter may have been enqueued before an admission condition changed
+	// (e.g. a maintenance window became active). Re-check admission before
+	// granting; if it is now denied, leave the request in the queue so it can
+	// be reconsidered once the condition clears, instead of dropping it.
+	if m.admissionGuard != nil {
+		if err := m.admissionGuard.BeforeAcquire(lockName, front.Holder, front.LeaseSec); err != nil {
+			m.addHistoryLocked(lockName, front.Holder, model.OpGrantNext,
+				"queued grant deferred: admission denied: "+err.Error())
+			return nil, nil
+		}
+	}
+
 	item, err := m.storage.Dequeue(lockName)
 	if err != nil {
 		return nil, err

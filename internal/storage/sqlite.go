@@ -1225,6 +1225,28 @@ func (s *Storage) Dequeue(lockName string) (*model.WaitQueueItem, error) {
 	return &item, nil
 }
 
+// FrontWaitQueue returns the oldest queued waiter for lockName without removing
+// it. It lets callers re-check admission conditions (such as an active
+// maintenance window) before committing to the dequeue in tryGrantNextLocked.
+func (s *Storage) FrontWaitQueue(lockName string) (*model.WaitQueueItem, error) {
+	row := s.db.QueryRow(`
+		SELECT id, lock_name, holder, reentrant, lease_sec, enqueued_at, timeout_at
+		FROM wait_queue WHERE lock_name = ? ORDER BY id LIMIT 1
+	`, lockName)
+
+	var item model.WaitQueueItem
+	var reentrantInt int
+	err := row.Scan(&item.ID, &item.LockName, &item.Holder, &reentrantInt, &item.LeaseSec, &item.EnqueuedAt, &item.TimeoutAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	item.Reentrant = reentrantInt != 0
+	return &item, nil
+}
+
 func (s *Storage) RemoveFromQueue(lockName, holder string) error {
 	_, err := s.db.Exec(`DELETE FROM wait_queue WHERE lock_name = ? AND holder = ?`, lockName, holder)
 	return err
