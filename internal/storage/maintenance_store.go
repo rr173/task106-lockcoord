@@ -41,3 +41,15 @@ func (s *Storage) UpdateMaintenanceStatus(id int64, status string) error {
 	}
 	return nil
 }
+
+
+func (s *Storage) CreateMaintenanceWindowWithEvent(window *model.MaintenanceWindow, eventType, holder, detail string) error {
+    tx, err := s.db.Begin()
+    if err != nil { return err }
+    defer tx.Rollback()
+    result, err := tx.Exec(`INSERT INTO coord_maintenance_windows(resource_path, mode, start_at, end_at, reason, operator, status, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, window.ResourcePath, window.Mode, window.StartAt, window.EndAt, window.Reason, window.Operator, window.Status, window.CreatedAt)
+    if err != nil { return err }
+    window.ID, _ = result.LastInsertId()
+    if _, err = tx.Exec(`INSERT INTO coordination_events(event_type, resource_path, holder, detail, created_at) VALUES(?, ?, ?, ?, ?)`, eventType, window.ResourcePath, holder, detail, window.CreatedAt); err != nil { return err }
+    return tx.Commit()
+}
